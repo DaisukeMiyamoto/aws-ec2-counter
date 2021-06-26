@@ -1,0 +1,101 @@
+# aws-ec2-counter
+# author: midaisuk@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Count and record number of EC2 instances and vCPUs with Tag based classification
+
+Parameters:
+    SamplingInterval:
+        Type: Number
+        Default: 1
+        MinValue: 1
+        MaxValue: 60
+        Description: sampling interval for job status by Lambda function (1 - 60 min)
+    TagKey:
+        Type: String
+        Default: ClusterName
+        Description: tag key for EC2 classification. use "ClusterName" for AWS ParallelCluster.
+
+Resources:
+    EC2CounterRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - 
+                        Effect: "Allow"
+                        Principal:
+                            Service:
+                                - "lambda.amazonaws.com"
+                        Action:
+                            - "sts:AssumeRole"
+            Path: "/"
+            Policies:
+                - 
+                    PolicyName: "PutCloudWatchLogs"
+                    PolicyDocument:
+                        Version: "2012-10-17"
+                        Statement:
+                            - 
+                                Effect: "Allow"
+                                Action:
+                                    - "logs:CreateLogGroup"
+                                    - "logs:CreateLogStream"
+                                    - "logs:PutLogEvents"
+                                Resource: "arn:aws:logs:*:*:*"
+                - 
+                    PolicyName: "DescribeEC2"
+                    PolicyDocument:
+                        Version: "2012-10-17"
+                        Statement:
+                            - 
+                                Effect: "Allow"
+                                Action:
+                                    - "ec2:DescribeInstances"
+                                Resource: "*"
+                - 
+                    PolicyName: "PutCloudWatchMetrics"
+                    PolicyDocument:
+                        Version: "2012-10-17"
+                        Statement:
+                            - 
+                                Effect: "Allow"
+                                Action:
+                                    - "cloudwatch:PutMetricData"
+                                Resource: "*"
+    
+    EC2CounterLambda:
+        Type: AWS::Lambda::Function
+        Properties:
+            Description: Count and record number of EC2 instances and vCPUs with Tag based classification
+            Environment:
+                Variables:
+                    TAG_KEY: !Ref TagKey
+            FunctionName: !Sub "${AWS::StackName}-EC2CounterLambda"
+            Handler: index.lambda_handler
+            Runtime: python3.7
+            Role: !GetAtt EC2CounterRole.Arn
+            Timeout: 30
+            Code:
+                ZipFile: |
+##INCLUDE_LAMBDA##
+
+    EC2CounterInvokeRule:
+        Type: AWS::Events::Rule
+        Properties:
+            Name: !Sub "${AWS::StackName}-EC2CounterInvokeRule"
+            ScheduleExpression: !Sub "cron(0/${SamplingInterval} * * * ? *)"
+            State: ENABLED
+            Targets:
+                -
+                    Arn: !GetAtt EC2CounterLambda.Arn
+                    Id: "EC2CounterLambda"
+                    
+    EC2CounterEvent:
+        Type: "AWS::Lambda::Permission"
+        Properties:
+            Action: "lambda:InvokeFunction"
+            FunctionName: !Ref EC2CounterLambda
+            Principal: "events.amazonaws.com"
+            SourceArn: !GetAtt EC2CounterInvokeRule.Arn
